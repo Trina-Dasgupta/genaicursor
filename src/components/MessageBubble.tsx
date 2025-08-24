@@ -1,428 +1,374 @@
 'use client'
 
+import { useState, useRef, useEffect } from 'react'
+import { Send, Loader2, Terminal, MessageSquare, Zap, Settings, FolderPlus } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, Bot, Copy, Check, Play, Code, EyeOff, Maximize2, RefreshCw } from 'lucide-react'
-import { useState, useMemo } from 'react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import toast from 'react-hot-toast'
+import { useAIStore } from '@/store/useAIStore'
 
-interface Message {
-  id: string
-  content: string
-  role: 'user' | 'assistant'
-  timestamp: Date
-  codeBlocks?: CodeBlock[]
-}
+// Import your components (these would be your actual components)
+const MessageBubble = ({ message }: any) => (
+  <div className="p-4 bg-gray-800 rounded-lg mb-4 text-white">
+    <strong>{message.role}:</strong> {message.content}
+  </div>
+)
 
-interface CodeBlock {
-  id: string
-  language: string
-  code: string
-}
+const CursorInterface = () => <div className="p-4 bg-purple-900 rounded-lg text-white">Cursor Interface</div>
 
-interface MessageBubbleProps {
-  message: Message
-}
 
-export default function MessageBubble({ message }: MessageBubbleProps) {
-  const [copiedBlocks, setCopiedBlocks] = useState<Set<string>>(new Set())
-  const [showCombinedPreview, setShowCombinedPreview] = useState(false)
-  const [previewKey, setPreviewKey] = useState(0)
+
+type ChatMode = 'regular' | 'cursor'
+
+export default function IntegratedChatInterface() {
+  const {
+    messages,
+    isTyping,
+    llmConfig,
+    cursorSessions,
+    activeCursorSession,
+    isGeneratingCommands,
+    sendMessage,
+    createCursorSession,
+    generateCommands
+  } = useAIStore()
   
-  const isUser = message.role === 'user'
+  const [input, setInput] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [chatMode, setChatMode] = useState<ChatMode>('regular')
+  const [showModeSelector, setShowModeSelector] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Extract and combine all code blocks from the message
-  const combinedCode = useMemo(() => {
-    const extractCodeBlocks = (content: string) => {
-      const parts = content.split(/(```[\w]*\n[\s\S]*?```)/g)
-      const blocks: { [key: string]: string } = {
-        html: '',
-        css: '',
-        javascript: ''
-      }
-      
-      parts.forEach(part => {
-        const codeMatch = part.match(/```(\w+)?\n([\s\S]*?)```/)
-        if (codeMatch) {
-          const [, language = 'text', code] = codeMatch
-          const lang = language.toLowerCase()
-          
-          if (lang === 'html') {
-            blocks.html += code + '\n'
-          } else if (lang === 'css') {
-            blocks.css += code + '\n'
-          } else if (lang === 'javascript' || lang === 'js') {
-            blocks.javascript += code + '\n'
-          }
-        }
-      })
-      
-      return blocks
-    }
-
-    // Use codeBlocks if available, otherwise extract from content
-    if (message.codeBlocks?.length) {
-      const blocks: { [key: string]: string } = {
-        html: '',
-        css: '',
-        javascript: ''
-      }
-      
-      message.codeBlocks.forEach(block => {
-        const lang = block.language.toLowerCase()
-        if (lang === 'html') {
-          blocks.html += block.code + '\n'
-        } else if (lang === 'css') {
-          blocks.css += block.code + '\n'
-        } else if (lang === 'javascript' || lang === 'js') {
-          blocks.javascript += block.code + '\n'
-        }
-      })
-      
-      return blocks
-    }
-    
-    return extractCodeBlocks(message.content)
-  }, [message])
-
-  // Check if there are any web technologies to preview
-  const hasWebCode = useMemo(() => {
-    return combinedCode.html.trim() || combinedCode.css.trim() || combinedCode.javascript.trim()
-  }, [combinedCode])
-
-  // Create complete HTML document with all code combined
-  const createCombinedPreview = () => {
-    const { html, css, javascript } = combinedCode
-    
-    // Check if HTML already contains a complete document
-    const hasCompleteHtml = html.includes('<!DOCTYPE') || html.includes('<html')
-    
-    if (hasCompleteHtml && !css && !javascript) {
-      return html
-    }
-    
-    // Create a complete document combining all code
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Preview</title>
-  <style>
-    /* Reset and base styles */
-    * {
-      box-sizing: border-box;
-    }
-    
-    body {
-      margin: 0;
-      padding: 20px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      background: #fff;
-    }
-    
-    /* User CSS */
-    ${css}
-  </style>
-</head>
-<body>
-  ${html}
-  
-  <script>
-    // Error handling
-    window.addEventListener('error', function(e) {
-      console.error('Runtime Error:', e.error?.message || e.message);
-    });
-    
-    // User JavaScript
-    ${javascript}
-  </script>
-</body>
-</html>`
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const copyToClipboard = async (text: string, blockId: string) => {
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages, isTyping])
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    
+    if (!input.trim()) return
+    
+    if (!llmConfig.apiKey) {
+      toast.error('Please configure your AI provider first')
+      return
+    }
+
+    setIsSubmitting(true)
+    const messageToSend = input.trim()
+    setInput('')
+    
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+
     try {
-      await navigator.clipboard.writeText(text)
-      setCopiedBlocks(prev => new Set(prev).add(blockId))
-      toast.success('Code copied to clipboard!')
-      
-      setTimeout(() => {
-        setCopiedBlocks(prev => {
-          const newSet = new Set(prev)
-          newSet.delete(blockId)
-          return newSet
-        })
-      }, 2000)
+      if (chatMode === 'cursor') {
+        // Extract project name from input
+        const projectName = extractProjectName(messageToSend)
+        await createCursorSession(projectName, messageToSend)
+        await generateCommands(messageToSend)
+        toast.success('Terminal commands generated!')
+      } else {
+        await sendMessage(messageToSend)
+      }
     } catch (error) {
-      toast.error('Failed to copy code')
+      toast.error('Failed to process request. Please check your API configuration.')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
-  const copyAllCode = async () => {
-    const { html, css, javascript } = combinedCode
-    let combinedText = ''
-    
-    if (html.trim()) {
-      combinedText += `HTML:\n\`\`\`html\n${html.trim()}\n\`\`\`\n\n`
-    }
-    if (css.trim()) {
-      combinedText += `CSS:\n\`\`\`css\n${css.trim()}\n\`\`\`\n\n`
-    }
-    if (javascript.trim()) {
-      combinedText += `JavaScript:\n\`\`\`javascript\n${javascript.trim()}\n\`\`\`\n\n`
-    }
-    
-    try {
-      await navigator.clipboard.writeText(combinedText)
-      toast.success('All code copied to clipboard!')
-    } catch (error) {
-      toast.error('Failed to copy code')
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit()
     }
   }
 
-  const refreshPreview = () => {
-    setPreviewKey(prev => prev + 1)
-  }
-
-  const createBlobUrl = (content: string) => {
-    const blob = new Blob([content], { type: 'text/html' })
-    return URL.createObjectURL(blob)
-  }
-
-  const renderContent = () => {
-    if (isUser) {
-      return <div className="whitespace-pre-wrap">{message.content}</div>
+  const adjustTextareaHeight = () => {
+    const textarea = textareaRef.current
+    if (textarea) {
+      textarea.style.height = 'auto'
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
     }
-
-    // For AI messages, parse and render with combined preview option
-    const parts = message.content.split(/(```[\w]*\n[\s\S]*?```)/g)
-    
-    return (
-      <div className="space-y-4">
-        {/* Combined Preview Button and Preview */}
-        {hasWebCode && (
-          <div className="space-y-3">
-            {/* Preview Controls */}
-            <div className="flex items-center justify-between p-3 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg">
-              <div className="flex items-center space-x-2">
-                <Code className="w-4 h-4 text-white" />
-                <span className="text-white font-medium">Interactive Preview Available</span>
-              </div>
-              <div className="flex space-x-2">
-                <button
-                  onClick={copyAllCode}
-                  className="flex items-center space-x-1 px-3 py-1 text-xs bg-white/20 hover:bg-white/30 text-white rounded transition-colors"
-                >
-                  <Copy className="w-3 h-3" />
-                  <span>Copy All</span>
-                </button>
-                <button
-                  onClick={() => setShowCombinedPreview(!showCombinedPreview)}
-                  className={`flex items-center space-x-1 px-3 py-1 text-xs rounded transition-colors ${
-                    showCombinedPreview
-                      ? 'bg-white text-blue-600'
-                      : 'bg-white/20 hover:bg-white/30 text-white'
-                  }`}
-                >
-                  {showCombinedPreview ? (
-                    <>
-                      <EyeOff className="w-3 h-3" />
-                      <span>Hide Preview</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3 h-3" />
-                      <span>Show Preview</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Combined Live Preview - Claude Style */}
-            <AnimatePresence>
-              {showCombinedPreview && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="rounded-xl overflow-hidden border border-gray-300 bg-white shadow-xl"
-                >
-                  {/* Preview Header */}
-                  <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <div className="flex space-x-1.5">
-                        <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                        <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                        <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                      </div>
-                      <span className="text-sm text-gray-700 font-medium">Live Preview</span>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={refreshPreview}
-                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
-                        title="Refresh Preview"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setShowCombinedPreview(false)}
-                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
-                        title="Close Preview"
-                      >
-                        <EyeOff className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                  
-                  {/* Preview Content */}
-                  <div className="relative bg-white">
-                    <iframe
-                      key={previewKey}
-                      src={createBlobUrl(createCombinedPreview())}
-                      className="w-full border-none bg-white"
-                      style={{ height: '500px', minHeight: '400px' }}
-                      title="Combined Code Preview"
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
-                    />
-                  </div>
-                  
-                  {/* Preview Footer */}
-                  <div className="bg-gray-50 px-4 py-2 border-t border-gray-200 text-xs text-gray-500">
-                    <div className="flex justify-between items-center">
-                      <span>
-                        Combined: {combinedCode.html.trim() ? 'HTML' : ''} 
-                        {combinedCode.css.trim() ? (combinedCode.html.trim() ? ' + CSS' : 'CSS') : ''} 
-                        {combinedCode.javascript.trim() ? (combinedCode.html.trim() || combinedCode.css.trim() ? ' + JS' : 'JS') : ''}
-                      </span>
-                      <span className="text-gray-400">Sandboxed execution</span>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-
-        {/* Individual Code Blocks */}
-        {parts.map((part, index) => {
-          const codeMatch = part.match(/```(\w+)?\n([\s\S]*?)```/)
-          
-          if (codeMatch) {
-            const [, language = 'text', code] = codeMatch
-            const blockId = `${message.id}-${index}`
-            const isCopied = copiedBlocks.has(blockId)
-            
-            return (
-              <div key={index} className="code-block rounded-xl overflow-hidden bg-gray-900 border border-gray-700">
-                <div className="flex items-center justify-between p-3 bg-gray-800 border-b border-gray-700">
-                  <span className="text-xs font-mono text-blue-300 uppercase tracking-wider">
-                    {language}
-                  </span>
-                  <button
-                    onClick={() => copyToClipboard(code, blockId)}
-                    className="flex items-center space-x-1 px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded transition-colors text-gray-300"
-                    title="Copy code"
-                  >
-                    {isCopied ? (
-                      <>
-                        <Check className="w-3 h-3" />
-                        <span>Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3 h-3" />
-                        <span>Copy</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-                
-                <SyntaxHighlighter
-                  language={language}
-                  style={atomDark}
-                  customStyle={{
-                    margin: 0,
-                    background: 'transparent',
-                    padding: '1.25rem',
-                    fontSize: '14px',
-                    lineHeight: '1.5',
-                  }}
-                  wrapLines
-                  showLineNumbers={language !== 'text'}
-                >
-                  {code}
-                </SyntaxHighlighter>
-              </div>
-            )
-          }
-          
-          return part ? (
-            <div key={index} className="whitespace-pre-wrap leading-relaxed text-gray-200">
-              {part}
-            </div>
-          ) : null
-        })}
-      </div>
-    )
   }
+
+  const extractProjectName = (prompt: string): string => {
+    const words = prompt.toLowerCase().split(' ')
+    const projectTypes = ['calculator', 'todo', 'portfolio', 'landing', 'dashboard', 'blog', 'website', 'app']
+    const foundType = projectTypes.find(type => words.some(word => word.includes(type)))
+    return foundType || 'web-project'
+  }
+
+  const isConfigValid = llmConfig.apiKey && 
+    (llmConfig.provider !== 'custom' || llmConfig.baseURL)
+
+  const getPlaceholderText = () => {
+    if (chatMode === 'cursor') {
+      return "Describe the website you want to build... (e.g., 'Create a modern calculator with glassmorphism design')"
+    }
+    return "Ask me anything about web development or request code..."
+  }
+
+  const getModeIcon = (mode: ChatMode) => {
+    return mode === 'cursor' ? <Terminal className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />
+  }
+
+  const getModeColor = (mode: ChatMode) => {
+    return mode === 'cursor' ? 'from-purple-500 to-pink-500' : 'from-blue-500 to-indigo-500'
+  }
+
+  const ActiveSession = activeCursorSession ? cursorSessions.find(s => s.id === activeCursorSession) : null
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-    >
-      <div className={`flex space-x-3 max-w-6xl w-full ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
-        {/* Avatar */}
-        <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-          isUser 
-            ? 'bg-gradient-to-br from-purple-500 to-pink-500' 
-            : 'bg-gray-700 border border-gray-600'
-        }`}>
-          {isUser ? (
-            <User className="w-4 h-4 text-white" />
-          ) : (
-            <Bot className="w-4 h-4 text-purple-300" />
-          )}
-        </div>
+    <div className="flex flex-col h-full max-w-none bg-gray-900">
+      {/* Header with Mode Selector */}
+      <div className="border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm">
+        <div className="max-w-6xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <h1 className="text-xl font-bold text-white">AI Assistant</h1>
+              
+              {/* Mode Toggle */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowModeSelector(!showModeSelector)}
+                  className={`flex items-center space-x-2 px-4 py-2 bg-gradient-to-r ${getModeColor(chatMode)} text-white rounded-lg transition-all duration-200 hover:shadow-lg`}
+                >
+                  {getModeIcon(chatMode)}
+                  <span className="font-medium capitalize">{chatMode} Mode</span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
 
-        {/* Message Content */}
-        <div className={`px-6 py-4 rounded-2xl flex-1 ${
-          isUser
-            ? 'bg-gradient-to-br from-purple-500 to-pink-500 text-white'
-            : 'bg-gray-800 border border-gray-700 text-gray-100'
-        } ${isUser ? 'rounded-br-md' : 'rounded-bl-md'}`}>
-          
-          {/* Header */}
-          <div className="flex items-center space-x-2 mb-3">
-            <span className={`font-semibold text-sm ${
-              isUser ? 'text-white' : 'text-gray-200'
-            }`}>
-              {isUser ? 'You' : 'AI Assistant'}
-            </span>
-            <span className={`text-xs ${
-              isUser ? 'text-purple-100' : 'text-gray-500'
-            }`}>
-              {message.timestamp.toLocaleTimeString([], { 
-                hour: '2-digit', 
-                minute: '2-digit' 
-              })}
-            </span>
-          </div>
+                {/* Mode Selector Dropdown */}
+                <AnimatePresence>
+                  {showModeSelector && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="absolute top-full mt-2 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50"
+                    >
+                      <div className="p-2">
+                        <button
+                          onClick={() => {
+                            setChatMode('regular')
+                            setShowModeSelector(false)
+                          }}
+                          className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            chatMode === 'regular' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+                          }`}
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                          <div className="text-left">
+                            <div className="font-medium">Regular Chat</div>
+                            <div className="text-xs opacity-75">Normal conversation & code help</div>
+                          </div>
+                        </button>
+                        
+                        <button
+                          onClick={() => {
+                            setChatMode('cursor')
+                            setShowModeSelector(false)
+                          }}
+                          className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            chatMode === 'cursor' ? 'bg-purple-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+                          }`}
+                        >
+                          <Terminal className="w-4 h-4" />
+                          <div className="text-left">
+                            <div className="font-medium">Cursor Mode</div>
+                            <div className="text-xs opacity-75">Generate terminal commands to build projects</div>
+                          </div>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
 
-          {/* Content */}
-          <div className="text-sm">
-            {renderContent()}
+            {/* Active Session Info */}
+            {ActiveSession && (
+              <div className="flex items-center space-x-2 text-gray-400">
+                <FolderPlus className="w-4 h-4" />
+                <span className="text-sm">{ActiveSession.projectName}</span>
+                <span className="text-xs px-2 py-1 bg-purple-600 text-white rounded">
+                  {ActiveSession.commands.length} commands
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
-    </motion.div>
+
+      {/* Messages Container */}
+      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+        <div className="max-w-6xl mx-auto">
+          <AnimatePresence mode="popLayout">
+            {messages.length === 0 && !ActiveSession ? (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex flex-col items-center justify-center h-full text-center"
+              >
+                <div className="p-8 bg-gradient-to-br from-gray-800 to-gray-900 rounded-3xl max-w-lg border border-gray-700 shadow-2xl">
+                  <div className="text-6xl mb-6">
+                    {chatMode === 'cursor' ? '⚡' : '🤖'}
+                  </div>
+                  <h2 className="text-2xl font-bold text-white mb-3">
+                    {chatMode === 'cursor' ? 'Ready to Build?' : 'Ready to Chat?'}
+                  </h2>
+                  <p className="text-gray-400 mb-6 leading-relaxed">
+                    {chatMode === 'cursor' 
+                      ? 'Describe your project and I\'ll generate terminal commands to build it step by step.'
+                      : 'Ask me anything about web development, request code, or get help with your projects.'
+                    }
+                  </p>
+                  <div className="text-sm text-gray-500 bg-gray-800 rounded-lg p-4">
+                    <div className="font-medium text-purple-400 mb-2">Try asking:</div>
+                    <div className="space-y-1">
+                      {chatMode === 'cursor' ? (
+                        <>
+                          <div>"Create a modern calculator app"</div>
+                          <div>"Build a todo list with animations"</div>
+                          <div>"Make a portfolio website"</div>
+                        </>
+                      ) : (
+                        <>
+                          <div>"Create a responsive navbar"</div>
+                          <div>"Help me debug this JavaScript"</div>
+                          <div>"Explain CSS Grid layout"</div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            ) : (
+              <>
+                {/* Show either regular messages OR cursor interface, not both */}
+                {chatMode === 'regular' ? (
+                  // Regular chat messages
+                  messages.map((message) => (
+                    <MessageBubble key={message.id} message={message} />
+                  ))
+                ) : (
+                  // Cursor interface when in cursor mode
+                  ActiveSession && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="cursor-interface"
+                    >
+                      <CursorInterface />
+                    </motion.div>
+                  )
+                )}
+              </>
+            )}
+          </AnimatePresence>
+
+          {/* Typing Indicator */}
+          <AnimatePresence>
+            {(isTyping || isGeneratingCommands) && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="flex items-center space-x-3 p-4"
+              >
+                <div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center">
+                  {chatMode === 'cursor' ? (
+                    <Terminal className="w-4 h-4 text-purple-400" />
+                  ) : (
+                    <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                  )}
+                </div>
+                <div className="text-gray-400">
+                  {isGeneratingCommands ? 'Generating terminal commands...' : 'AI is thinking...'}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      {/* Input Container */}
+      <div className="border-t border-gray-700 bg-gray-900/50 backdrop-blur-sm">
+        <div className="max-w-4xl mx-auto p-6">
+          <div className="flex space-x-4">
+            <div className="flex-1 relative">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  adjustTextareaHeight()
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder={getPlaceholderText()}
+                className="w-full px-4 py-3 pr-12 bg-gray-800 border border-gray-700 rounded-2xl text-white placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-transparent transition-all duration-200 min-h-[50px] max-h-[120px]"
+                disabled={isSubmitting || !isConfigValid}
+                rows={1}
+              />
+              
+              {/* Send Button */}
+              <button
+                onClick={handleSubmit}
+                disabled={!input.trim() || isSubmitting || !isConfigValid}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-gradient-to-r ${getModeColor(chatMode)} rounded-xl text-white disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all duration-200 disabled:hover:shadow-none`}
+              >
+                {isSubmitting || isGeneratingCommands ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : chatMode === 'cursor' ? (
+                  <Zap className="w-5 h-5" />
+                ) : (
+                  <Send className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Status Text */}
+          <div className="flex justify-between items-center mt-3 text-xs text-gray-500">
+            <span>
+              {!isConfigValid 
+                ? 'AI provider configuration required' 
+                : chatMode === 'cursor'
+                  ? 'Describe your project to generate terminal commands'
+                  : 'Press Enter to send, Shift+Enter for new line'
+              }
+            </span>
+            <div className="flex items-center space-x-4">
+              <span className="text-gray-600">{input.length}/2000</span>
+              {chatMode === 'cursor' && (
+                <div className="flex items-center space-x-1">
+                  <Terminal className="w-3 h-3" />
+                  <span>Cursor Mode</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Click outside to close mode selector */}
+      {showModeSelector && (
+        <div 
+          className="fixed inset-0 z-40" 
+          onClick={() => setShowModeSelector(false)}
+        />
+      )}
+    </div>
   )
 }
